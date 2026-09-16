@@ -9,108 +9,142 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # 1. Repository download
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Launcher ZIP extract
       - name: Extract Launcher ZIP
         run: |
+          set -e
+
           rm -rf extracted
-          mkdir extracted
+          mkdir -p extracted
+
           ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -1)
-          echo "ZIP=$ZIP"
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: Launcher ZIP not found"
+            ls -lah
+            exit 1
+          fi
+
+          echo "Using ZIP: $ZIP"
+
           unzip -q "$ZIP" -d extracted
 
+          echo "ZIP extracted successfully"
+
+      # 3. Find the actual Launcher project
       - name: Find Launcher project
         run: |
-          PROJECT=$(find extracted -type f -path "*/support_files/custom_4Mb.csv" | head -1 | sed 's#/support_files/custom_4Mb.csv##')
+          set -e
+
+          PROJECT=$(find extracted \
+            -type f \
+            -path "*/support_files/custom_4Mb.csv" \
+            -print -quit | \
+            sed 's#/support_files/custom_4Mb.csv##')
 
           if [ -z "$PROJECT" ]; then
             echo "ERROR: Launcher project not found"
+
+            echo "platformio.ini files:"
             find extracted -name platformio.ini -print
+
             exit 1
           fi
 
           echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
-          echo "Launcher project: $PROJECT"
+
+          echo "Launcher project:"
+          echo "$PROJECT"
 
           test -f "$PROJECT/platformio.ini"
           test -d "$PROJECT/boards/esp32-devkit-ili9341-xpt2046"
 
+          echo "Launcher project structure OK"
+
+      # 4. Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 5. Install PlatformIO
       - name: Install PlatformIO
         run: |
           python -m pip install --upgrade pip
           pip install platformio
 
-      - name: Add ESP32 DevKit environment
+          pio --version
+
+      # 6. Fix the incompatible check_submodules script
+      - name: Fix build scripts
         working-directory: ${{ env.PROJECT }}
         run: |
-          if ! grep -q '^\[env:esp32-devkit-ili9341-xpt2046\]' platformio.ini; then
-            cat >> platformio.ini <<'EOF'
+          set -e
 
-          [env:esp32-devkit-ili9341-xpt2046]
-          board = esp32
-          board_build.partitions = support_files/custom_4Mb.csv
-          board_upload.flash_size = 4MB
-          board_upload.maximum_size = 4194304
+          echo "Removing incompatible check_submodules extra script..."
 
-          build_src_filter =
-            ${env.build_src_filter}
-            +<boards/esp32-devkit-ili9341-xpt2046>
+          sed -i \
+            '/^[[:space:]]*pre:support_files\/check_submodules.py[[:space:]]*$/d' \
+            platformio.ini
 
-          build_flags =
-            ${env.build_flags}
-            -DDEVICE_NAME=\"ESP32 DevKit V1 2.8 ILI9341\"
-            -DOTA_TAG=\"esp32-devkit-ili9341-xpt2046\"
-            -DTFT_DATABUS_N=0
-            -DTFT_DISPLAY_DRIVER_N=4
-            -DTFT_CS=27
-            -DTFT_DC=26
-            -DTFT_RST=25
-            -DTFT_SCK=18
-            -DTFT_MOSI=23
-            -DTFT_MISO=19
-            -DTFT_WIDTH=240
-            -DTFT_HEIGHT=320
-            -DROTATION=1
-            -DHAS_TOUCH=1
-            -DHAS_RESISTIVE_TOUCH=1
-            -DTOUCH_CTRL_XPT2046=1
-            -DTOUCH_IRQ=-1
-            -DTOUCH_SCK=18
-            -DTOUCH_MOSI=23
-            -DTOUCH_MISO=19
-            -DTOUCH_CS=33
-            -DSD_CS=32
-            -DSD_SCK=18
-            -DSD_MOSI=23
-            -DSD_MISO=19
+          echo "Checking remaining extra scripts..."
 
-          lib_ignore =
-            SensorLib
-            XPowersLib
-          EOF
-          fi
+          grep -A10 '^extra_scripts' platformio.ini || true
 
-      - name: Show PlatformIO environments
+          echo "Build-script fix completed."
+
+      # 7. Confirm our target exists
+      - name: Check PlatformIO environment
         working-directory: ${{ env.PROJECT }}
         run: |
+          set -e
+
+          echo "Checking ESP32 DevKit environment..."
+
+          grep -n \
+            'esp32-devkit-ili9341-xpt2046' \
+            platformio.ini \
+            boards/esp32-devkit-ili9341-xpt2046/platformio.ini
+
+          echo ""
+          echo "PlatformIO configuration:"
           pio project config
-          pio run --list-targets || true
 
-      - name: Build Launcher
+      # 8. Build
+      - name: Build ESP32 Launcher
         working-directory: ${{ env.PROJECT }}
         run: |
+          set -e
+
+          echo "======================================"
+          echo " BUILDING ESP32 LAUNCHER"
+          echo "======================================"
+
           pio run -e esp32-devkit-ili9341-xpt2046
 
-      - name: Upload BIN files
+      # 9. Show generated files
+      - name: Show build files
+        working-directory: ${{ env.PROJECT }}
+        run: |
+          echo "======================================"
+          echo " BUILD OUTPUT"
+          echo "======================================"
+
+          find .pio/build/esp32-devkit-ili9341-xpt2046 \
+            -maxdepth 1 \
+            -type f \
+            -printf "%f\n" | sort
+
+      # 10. Upload complete firmware files
+      - name: Upload ESP32 Launcher BIN
         uses: actions/upload-artifact@v4
         with:
-          name: ESP32-Launcher-BIN
+          name: ESP32-Launcher-DevKit-ILI9341-XPT2046
           path: |
             ${{ env.PROJECT }}/.pio/build/esp32-devkit-ili9341-xpt2046/*.bin
           if-no-files-found: error
