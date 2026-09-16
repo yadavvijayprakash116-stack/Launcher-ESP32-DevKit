@@ -14,29 +14,103 @@ jobs:
 
       - name: Extract Launcher ZIP
         run: |
-          unzip -q *.zip -d extracted
-          find extracted -maxdepth 2 -type f | head -50
+          rm -rf extracted
+          mkdir extracted
+          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -1)
+          echo "ZIP=$ZIP"
+          unzip -q "$ZIP" -d extracted
 
-      - name: Find project
+      - name: Find Launcher project
         run: |
-          PROJECT=$(find extracted -name platformio.ini -type f | head -1 | xargs dirname)
-          echo "PROJECT=$PROJECT" >> $GITHUB_ENV
-          echo "Project found at: $PROJECT"
+          PROJECT=$(find extracted -type f -path "*/support_files/custom_4Mb.csv" | head -1 | sed 's#/support_files/custom_4Mb.csv##')
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: Launcher project not found"
+            find extracted -name platformio.ini -print
+            exit 1
+          fi
+
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+          echo "Launcher project: $PROJECT"
+
+          test -f "$PROJECT/platformio.ini"
+          test -d "$PROJECT/boards/esp32-devkit-ili9341-xpt2046"
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.11"
 
       - name: Install PlatformIO
-        run: pip install platformio
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio
+
+      - name: Add ESP32 DevKit environment
+        working-directory: ${{ env.PROJECT }}
+        run: |
+          if ! grep -q '^\[env:esp32-devkit-ili9341-xpt2046\]' platformio.ini; then
+            cat >> platformio.ini <<'EOF'
+
+          [env:esp32-devkit-ili9341-xpt2046]
+          board = esp32
+          board_build.partitions = support_files/custom_4Mb.csv
+          board_upload.flash_size = 4MB
+          board_upload.maximum_size = 4194304
+
+          build_src_filter =
+            ${env.build_src_filter}
+            +<boards/esp32-devkit-ili9341-xpt2046>
+
+          build_flags =
+            ${env.build_flags}
+            -DDEVICE_NAME=\"ESP32 DevKit V1 2.8 ILI9341\"
+            -DOTA_TAG=\"esp32-devkit-ili9341-xpt2046\"
+            -DTFT_DATABUS_N=0
+            -DTFT_DISPLAY_DRIVER_N=4
+            -DTFT_CS=27
+            -DTFT_DC=26
+            -DTFT_RST=25
+            -DTFT_SCK=18
+            -DTFT_MOSI=23
+            -DTFT_MISO=19
+            -DTFT_WIDTH=240
+            -DTFT_HEIGHT=320
+            -DROTATION=1
+            -DHAS_TOUCH=1
+            -DHAS_RESISTIVE_TOUCH=1
+            -DTOUCH_CTRL_XPT2046=1
+            -DTOUCH_IRQ=-1
+            -DTOUCH_SCK=18
+            -DTOUCH_MOSI=23
+            -DTOUCH_MISO=19
+            -DTOUCH_CS=33
+            -DSD_CS=32
+            -DSD_SCK=18
+            -DSD_MOSI=23
+            -DSD_MISO=19
+
+          lib_ignore =
+            SensorLib
+            XPowersLib
+          EOF
+          fi
+
+      - name: Show PlatformIO environments
+        working-directory: ${{ env.PROJECT }}
+        run: |
+          pio project config
+          pio run --list-targets || true
 
       - name: Build Launcher
         working-directory: ${{ env.PROJECT }}
-        run: pio run -e esp32-devkit-ili9341-xpt2046
+        run: |
+          pio run -e esp32-devkit-ili9341-xpt2046
 
-      - name: Upload BIN
+      - name: Upload BIN files
         uses: actions/upload-artifact@v4
         with:
           name: ESP32-Launcher-BIN
-          path: ${{ env.PROJECT }}/.pio/build/esp32-devkit-ili9341-xpt2046/*.bin
+          path: |
+            ${{ env.PROJECT }}/.pio/build/esp32-devkit-ili9341-xpt2046/*.bin
+          if-no-files-found: error
