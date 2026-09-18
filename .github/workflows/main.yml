@@ -1,4 +1,4 @@
-name: Build ESP32 Launcher
+name: Build XPT2046 Touch Test
 
 on:
   workflow_dispatch:
@@ -9,24 +9,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # 1. Repository download
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Launcher ZIP extract
-      - name: Extract Launcher ZIP
+      - name: Extract Touch Test ZIP
         run: |
           set -e
 
           rm -rf extracted
           mkdir -p extracted
 
-          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -1)
+          ZIP=$(find . -maxdepth 1 -type f \
+            -name 'XPT2046-Touch-Test-ESP32-DevKit-ILI9341-SAME-WIRING.zip' \
+            | head -1)
 
           if [ -z "$ZIP" ]; then
-            echo "ERROR: Launcher ZIP not found"
-            ls -lah
+            echo "ERROR: Touch Test ZIP not found"
+            echo "ZIP files in repository:"
+            find . -maxdepth 1 -type f -name '*.zip' -print
             exit 1
           fi
 
@@ -34,117 +34,94 @@ jobs:
 
           unzip -q "$ZIP" -d extracted
 
-          echo "ZIP extracted successfully"
+          echo "Extracted files:"
+          find extracted -maxdepth 3 -type f | sort
 
-      # 3. Find the actual Launcher project
-      - name: Find Launcher project
+      - name: Find Touch Test project
         run: |
           set -e
 
-          PROJECT=$(find extracted \
-            -type f \
-            -path "*/support_files/custom_4Mb.csv" \
-            -print -quit | \
-            sed 's#/support_files/custom_4Mb.csv##')
+          PROJECT=$(find extracted -type f -name 'platformio.ini' \
+            | head -1 \
+            | sed 's#/platformio.ini##')
 
           if [ -z "$PROJECT" ]; then
-            echo "ERROR: Launcher project not found"
-
-            echo "platformio.ini files:"
-            find extracted -name platformio.ini -print
-
+            echo "ERROR: platformio.ini not found"
+            find extracted -name 'platformio.ini' -print
             exit 1
           fi
 
           echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
 
-          echo "Launcher project:"
+          echo "Touch Test project:"
           echo "$PROJECT"
 
           test -f "$PROJECT/platformio.ini"
-          test -d "$PROJECT/boards/esp32-devkit-ili9341-xpt2046"
+          test -f "$PROJECT/src/main.cpp"
 
-          echo "Launcher project structure OK"
-
-      # 4. Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      # 5. Install PlatformIO
       - name: Install PlatformIO
         run: |
           python -m pip install --upgrade pip
           pip install platformio
 
-          pio --version
-
-      # 6. Fix the incompatible check_submodules script
-      - name: Fix build scripts
-        working-directory: ${{ env.PROJECT }}
-        run: |
-          set -e
-
-          echo "Removing incompatible check_submodules extra script..."
-
-          sed -i \
-            '/^[[:space:]]*pre:support_files\/check_submodules.py[[:space:]]*$/d' \
-            platformio.ini
-
-          echo "Checking remaining extra scripts..."
-
-          grep -A10 '^extra_scripts' platformio.ini || true
-
-          echo "Build-script fix completed."
-
-      # 7. Confirm our target exists
       - name: Check PlatformIO environment
         working-directory: ${{ env.PROJECT }}
         run: |
-          set -e
-
-          echo "Checking ESP32 DevKit environment..."
-
-          grep -n \
-            'esp32-devkit-ili9341-xpt2046' \
-            platformio.ini \
-            boards/esp32-devkit-ili9341-xpt2046/platformio.ini
-
-          echo ""
-          echo "PlatformIO configuration:"
           pio project config
+          pio run --list-targets || true
 
-      # 8. Build
-      - name: Build ESP32 Launcher
+      - name: Build Touch Test
         working-directory: ${{ env.PROJECT }}
         run: |
           set -e
-
-          echo "======================================"
-          echo " BUILDING ESP32 LAUNCHER"
-          echo "======================================"
-
           pio run -e esp32-devkit-ili9341-xpt2046
 
-      # 9. Show generated files
       - name: Show build files
         working-directory: ${{ env.PROJECT }}
         run: |
-          echo "======================================"
-          echo " BUILD OUTPUT"
-          echo "======================================"
-
+          echo "Build output:"
           find .pio/build/esp32-devkit-ili9341-xpt2046 \
             -maxdepth 1 \
             -type f \
-            -printf "%f\n" | sort
+            -printf '%f\n' \
+            | sort
 
-      # 10. Upload complete firmware files
-      - name: Upload ESP32 Launcher BIN
+      - name: Create factory BIN
+        working-directory: ${{ env.PROJECT }}
+        run: |
+          set -e
+
+          BUILD_DIR=".pio/build/esp32-devkit-ili9341-xpt2046"
+
+          test -f "$BUILD_DIR/bootloader.bin"
+          test -f "$BUILD_DIR/partitions.bin"
+          test -f "$BUILD_DIR/firmware.bin"
+
+          python -m esptool version
+
+          python -m esptool merge-bin \
+            -o "$BUILD_DIR/Firmware.factory.bin" \
+            --flash-mode dio \
+            --flash-freq 40m \
+            --flash-size 4MB \
+            0x1000 "$BUILD_DIR/bootloader.bin" \
+            0x8000 "$BUILD_DIR/partitions.bin" \
+            0x10000 "$BUILD_DIR/firmware.bin"
+
+          ls -lh "$BUILD_DIR"/*.bin
+
+      - name: Upload Touch Test BIN
         uses: actions/upload-artifact@v4
         with:
-          name: ESP32-Launcher-DevKit-ILI9341-XPT2046
+          name: XPT2046-Touch-Test-BIN
           path: |
-            ${{ env.PROJECT }}/.pio/build/esp32-devkit-ili9341-xpt2046/*.bin
+            ${{ env.PROJECT }}/.pio/build/esp32-devkit-ili9341-xpt2046/Firmware.factory.bin
+            ${{ env.PROJECT }}/.pio/build/esp32-devkit-ili9341-xpt2046/firmware.bin
+            ${{ env.PROJECT }}/.pio/build/esp32-devkit-ili9341-xpt2046/bootloader.bin
+            ${{ env.PROJECT }}/.pio/build/esp32-devkit-ili9341-xpt2046/partitions.bin
           if-no-files-found: error
