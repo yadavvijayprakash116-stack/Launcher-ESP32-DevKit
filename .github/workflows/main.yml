@@ -12,21 +12,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract Touch Test ZIP
+      - name: Find and Extract Touch Test ZIP
         run: |
           set -e
 
           rm -rf extracted
           mkdir -p extracted
 
-          ZIP=$(find . -maxdepth 1 -type f \
-            -name 'XPT2046-Touch-Test-ESP32-DevKit-ILI9341-SAME-WIRING.zip' \
+          echo "ZIP files in repository:"
+          find . -type f -name "*.zip" -print
+
+          ZIP=$(find . -type f -name "*.zip" \
+            ! -path "./.git/*" \
             | head -1)
 
           if [ -z "$ZIP" ]; then
-            echo "ERROR: Touch Test ZIP not found"
-            echo "ZIP files in repository:"
-            find . -maxdepth 1 -type f -name '*.zip' -print
+            echo "ERROR: No ZIP file found"
             exit 1
           fi
 
@@ -34,44 +35,44 @@ jobs:
 
           unzip -q "$ZIP" -d extracted
 
-          echo "Extracted files:"
-          find extracted -maxdepth 3 -type f | sort
+          echo "Extracted project:"
+          find extracted -type f -name "platformio.ini" -print
 
       - name: Find Touch Test project
         run: |
           set -e
 
-          PROJECT=$(find extracted -type f -name 'platformio.ini' \
+          PROJECT=$(find extracted -type f -name "platformio.ini" \
             | head -1 \
             | sed 's#/platformio.ini##')
 
           if [ -z "$PROJECT" ]; then
             echo "ERROR: platformio.ini not found"
-            find extracted -name 'platformio.ini' -print
+            find extracted -maxdepth 4 -type f -print
             exit 1
           fi
 
           echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
 
-          echo "Touch Test project:"
+          echo "Using project:"
           echo "$PROJECT"
 
           test -f "$PROJECT/platformio.ini"
-          test -f "$PROJECT/src/main.cpp"
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install PlatformIO
         run: |
           python -m pip install --upgrade pip
           pip install platformio
 
-      - name: Check PlatformIO environment
+      - name: Check PlatformIO
         working-directory: ${{ env.PROJECT }}
         run: |
+          pio --version
           pio project config
           pio run --list-targets || true
 
@@ -84,11 +85,12 @@ jobs:
       - name: Show build files
         working-directory: ${{ env.PROJECT }}
         run: |
-          echo "Build output:"
+          echo "===== BIN FILES ====="
           find .pio/build/esp32-devkit-ili9341-xpt2046 \
             -maxdepth 1 \
             -type f \
-            -printf '%f\n' \
+            -name "*.bin" \
+            -printf "%f\n" \
             | sort
 
       - name: Create factory BIN
@@ -96,24 +98,23 @@ jobs:
         run: |
           set -e
 
-          BUILD_DIR=".pio/build/esp32-devkit-ili9341-xpt2046"
+          BUILD=".pio/build/esp32-devkit-ili9341-xpt2046"
 
-          test -f "$BUILD_DIR/bootloader.bin"
-          test -f "$BUILD_DIR/partitions.bin"
-          test -f "$BUILD_DIR/firmware.bin"
-
-          python -m esptool version
+          test -f "$BUILD/bootloader.bin"
+          test -f "$BUILD/partitions.bin"
+          test -f "$BUILD/firmware.bin"
 
           python -m esptool merge-bin \
-            -o "$BUILD_DIR/Firmware.factory.bin" \
+            -o "$BUILD/Firmware.factory.bin" \
             --flash-mode dio \
             --flash-freq 40m \
             --flash-size 4MB \
-            0x1000 "$BUILD_DIR/bootloader.bin" \
-            0x8000 "$BUILD_DIR/partitions.bin" \
-            0x10000 "$BUILD_DIR/firmware.bin"
+            0x1000 "$BUILD/bootloader.bin" \
+            0x8000 "$BUILD/partitions.bin" \
+            0x10000 "$BUILD/firmware.bin"
 
-          ls -lh "$BUILD_DIR"/*.bin
+          echo "===== FACTORY BIN ====="
+          ls -lh "$BUILD/Firmware.factory.bin"
 
       - name: Upload Touch Test BIN
         uses: actions/upload-artifact@v4
