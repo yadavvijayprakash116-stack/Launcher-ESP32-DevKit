@@ -10,12 +10,12 @@ jobs:
 
     steps:
 
-      # 1. Repository
+      # 1. GitHub repository checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # 2. ZIP खोजकर extract करना
+      # 2. Touch Test ZIP खोजकर extract करना
       - name: Find and Extract Touch Test ZIP
         run: |
           set -e
@@ -24,6 +24,7 @@ jobs:
           mkdir -p extracted
 
           echo "===== ZIP FILES ====="
+
           find . -type f -name "*.zip" \
             ! -path "./.git/*" \
             -print
@@ -42,8 +43,13 @@ jobs:
 
           unzip -q "$ZIP" -d extracted
 
+          echo ""
           echo "===== PLATFORMIO PROJECTS ====="
-          find extracted -type f -name "platformio.ini" -print
+
+          find extracted \
+            -type f \
+            -name "platformio.ini" \
+            -print
 
 
       # 3. PlatformIO project ढूँढना
@@ -59,26 +65,32 @@ jobs:
 
           if [ -z "$PROJECT" ]; then
             echo "ERROR: platformio.ini not found"
-            find extracted -maxdepth 5 -type f -print
+
+            find extracted \
+              -maxdepth 5 \
+              -type f \
+              -print
+
             exit 1
           fi
 
           echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
 
+          echo ""
           echo "===== PROJECT ====="
           echo "$PROJECT"
 
           test -f "$PROJECT/platformio.ini"
 
 
-      # 4. Python
+      # 4. Python 3.11
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
 
-      # 5. PlatformIO + esptool
+      # 5. PlatformIO और esptool
       - name: Install PlatformIO and esptool
         run: |
           set -e
@@ -87,10 +99,12 @@ jobs:
 
           pip install platformio esptool
 
-          echo "===== PLATFORMIO ====="
+          echo ""
+          echo "===== PLATFORMIO VERSION ====="
           pio --version
 
-          echo "===== ESPTOOL ====="
+          echo ""
+          echo "===== ESPTOOL VERSION ====="
           python -m esptool version
 
 
@@ -101,22 +115,27 @@ jobs:
           set -e
 
           echo "===== PLATFORMIO CONFIG ====="
+
           pio project config
 
-          echo "===== TARGETS ====="
+          echo ""
+          echo "===== PLATFORMIO TARGETS ====="
+
           pio run --list-targets || true
 
 
-      # 7. Build
+      # 7. Touch Test firmware build
       - name: Build Touch Test
         working-directory: ${{ env.PROJECT }}
         run: |
           set -e
 
+          echo "===== BUILDING ESP32 TOUCH TEST ====="
+
           pio run -e esp32-devkit-ili9341-xpt2046
 
 
-      # 8. Build files दिखाना
+      # 8. Build files check
       - name: Show build files
         working-directory: ${{ env.PROJECT }}
         run: |
@@ -124,11 +143,17 @@ jobs:
 
           BUILD=".pio/build/esp32-devkit-ili9341-xpt2046"
 
-          echo "===== ALL BUILD FILES ====="
-          find "$BUILD" -maxdepth 1 -type f -printf "%f\n" | sort
+          echo "===== BUILD FILES ====="
+
+          find "$BUILD" \
+            -maxdepth 1 \
+            -type f \
+            -printf "%f\n" \
+            | sort
 
           echo ""
           echo "===== BIN FILES ====="
+
           find "$BUILD" \
             -maxdepth 1 \
             -type f \
@@ -145,20 +170,20 @@ jobs:
 
           BUILD=".pio/build/esp32-devkit-ili9341-xpt2046"
 
-          echo "Checking required files..."
+          echo "===== CHECKING BIN FILES ====="
 
           test -f "$BUILD/bootloader.bin"
           test -f "$BUILD/partitions.bin"
           test -f "$BUILD/firmware.bin"
 
-          echo "bootloader.bin     OK"
-          echo "partitions.bin     OK"
-          echo "firmware.bin       OK"
+          echo "bootloader.bin  OK"
+          echo "partitions.bin  OK"
+          echo "firmware.bin    OK"
 
           echo ""
-          echo "Creating Firmware.factory.bin..."
+          echo "===== CREATING FACTORY BIN ====="
 
-          python -m esptool merge-bin \
+          python -m esptool --chip esp32 merge-bin \
             -o "$BUILD/Firmware.factory.bin" \
             --flash-mode dio \
             --flash-freq 40m \
@@ -173,7 +198,7 @@ jobs:
           ls -lh "$BUILD/Firmware.factory.bin"
 
 
-      # 10. BIN artifact upload
+      # 10. BIN files upload
       - name: Upload Touch Test BIN
         uses: actions/upload-artifact@v4
         with:
